@@ -1,3 +1,6 @@
+v1.0.5
+-Sanity check
+
 v1.0.1
 -Test update for sanity checks on auto updating
 
