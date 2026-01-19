@@ -1,19 +1,29 @@
 ﻿<?xml version="1.0" encoding="UTF-8"?>
-<addon id="script.kodi.profiler" name="Profiler" version="0.7.0" provider-name="MDMAinsley">
+<addon id="script.kodi.profiler" 
+	   name="Profiler" 
+	   version="1.0.0"
+	   provider-name="MDMAinsley">
+	   
   <requires>
-    <import addon="xbmc.python" version="1.0.0" />
+    <import addon="xbmc.python" version="3.0.0" />
   </requires>
-  <extension point="xbmc.python.script" library="default.py">
+  
+  <extension point="xbmc.python.script"
+			 library="default.py">
     <provides>executable</provides>
   </extension>
+  
   <extension point="xbmc.addon.metadata">
     <summary>Backup/restore Kodi profile across devices</summary>
     <description>Backs up portable userdata and reinstalls add-ons by ID. Supports Backblaze B2.</description>
     <platform>all</platform>
     <assets>
-      <icon>res/icon.png</icon>
-      <fanart>res/fanart.jpg</fanart>
+      <icon>icon.png</icon>
+      <fanart>fanart.jpg</fanart>
     </assets>
   </extension>
-  <extension point="xbmc.service" library="resources/lib/service.py" start="startup" />
+  
+  <extension point="xbmc.service" 
+			 library="resources/lib/service.py"
+			 start="startup" />
 </addon>

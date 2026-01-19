@@ -1,0 +1,3 @@
+v1.0.0 
+-Create local profile backups or store online by connecting your Backblaze account.
+-Restore local profile backups or retrieve online from your Backblaze account.
