@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<settings>
+  <category label="Backblaze B2">
+    <setting id="b2_bucket_id" type="text" label="Bucket ID" default=""/>
+    <setting id="b2_key_id" type="text" label="Application Key ID" default=""/>
+    <setting id="b2_app_key" type="text" label="Application Key" default="" option="hidden"/>
+    <setting id="b2_bucket_name" type="text" label="Bucket name" default=""/>
+    <setting id="b2_prefix" type="text" label="Folder/prefix (optional)" default="kodi-backups/"/>
+  </category>
+
+  <category label="Backup content">
+    <setting id="include_keymaps" type="bool" label="Include keymaps/" default="true"/>
+    <setting id="include_advancedsettings" type="bool" label="Include advancedsettings.xml" default="false"/>
+    <setting id="overwrite_xml_on_restore" type="bool" label="Overwrite XML files on restore" default="true"/>
+  </category>
+  
+  <setting id="pending_finalize" type="bool" label="pending_finalize" default="false" visible="false"/>
+  <setting id="pending_skin" type="text" label="pending_skin" default="" visible="false"/>
+  <setting id="restore_in_progress" type="bool" default="false" visible="false"/>
+</settings>
