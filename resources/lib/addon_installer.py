@@ -1,9 +1,39 @@
+import os
 import time
 import xbmc
 import xbmcgui
+import xbmcvfs
+import urllib.request
 
 from resources.lib.jsonrpc import JsonRpc
 from resources.lib.log import info, warn, err, exc
+from resources.lib.paths import temp
+
+
+def _ensure_dir(path: str):
+    if not xbmcvfs.exists(path):
+        xbmcvfs.mkdirs(path)
+
+
+def _download_to(url: str, dst_path: str):
+    """
+    Download url -> dst_path (binary). Raises on failure.
+    Uses urllib (works on Kodi Python).
+    """
+    info(f"Downloading: {url} -> {dst_path}", notify=True)
+    _ensure_dir(os.path.dirname(dst_path))
+
+    # urllib wants a normal filesystem path; dst_path already is translated via temp()
+    with urllib.request.urlopen(url, timeout=60) as r:
+        with open(dst_path, "wb") as f:
+            while True:
+                chunk = r.read(1024 * 256)
+                if not chunk:
+                    break
+                f.write(chunk)
+
+    if not os.path.isfile(dst_path) or os.path.getsize(dst_path) < 1024:
+        raise RuntimeError(f"Downloaded file looks wrong: {dst_path}")
 
 
 def _preflight_or_die(rpc: JsonRpc):
@@ -15,7 +45,7 @@ def _preflight_or_die(rpc: JsonRpc):
         raise
 
 
-def _wait_until_installed_by_list(rpc: JsonRpc, addon_id: str, timeout_s: int = 45):
+def _wait_until_installed_by_list(rpc: JsonRpc, addon_id: str, timeout_s: int = 180):
     """
     Firestick-safe: poll Addons.GetAddons(installed=True) and check for addonid.
     """
@@ -41,25 +71,55 @@ def _wait_until_installed_by_list(rpc: JsonRpc, addon_id: str, timeout_s: int = 
 
         xbmc.sleep(1000)
 
-def _install_repo_entries(title: str, repo_entries, timeout_per_item_s=120):
+
+def _validate_manifest(manifest: dict):
+    repos = manifest.get("repos")
+    addons = manifest.get("addons")
+
+    if not isinstance(repos, list):
+        raise RuntimeError("Manifest invalid: repos must be a list of dicts")
+
+    for r in repos:
+        if not isinstance(r, dict):
+            raise RuntimeError("Manifest invalid: repos must contain dict entries only")
+        if not r.get("id"):
+            raise RuntimeError("Manifest invalid: repo entry missing id")
+
+    if not isinstance(addons, list):
+        raise RuntimeError("Manifest invalid: addons must be a list")
+    for a in addons:
+        if not isinstance(a, str):
+            raise RuntimeError("Manifest invalid: addons must be strings")
+        if a.startswith("repository."):
+            raise RuntimeError("Manifest invalid: addons list must not contain repository.* IDs")
+
+
+def _install_repos(repo_entries, timeout_per_repo_s: int = 180):
     rpc = JsonRpc()
     _preflight_or_die(rpc)
+
     installed_ids = rpc.get_installed_ids()
 
     installed, skipped, failed = [], [], []
 
     dialog = xbmcgui.DialogProgress()
-    dialog.create("Profiler", title)
+    dialog.create("Profiler", "Installing repositories…")
 
     try:
         total = len(repo_entries) or 1
 
         for i, repo in enumerate(repo_entries, start=1):
+            if dialog.iscanceled():
+                warn("User cancelled repo install phase", notify=True)
+                failed.append({"id": repo.get("id", ""), "error": "User cancelled"})
+                break
+
             rid = repo["id"]
-            zip_path = repo.get("zip_path") or ""
+            zip_path = (repo.get("zip_path") or "").strip()
+            zip_url = (repo.get("zip_url") or "").strip()
 
             pct = int((i / total) * 100)
-            dialog.update(pct, f"{title} ({i}/{total}): {rid}")
+            dialog.update(pct, f"Repo ({i}/{total}): {rid}")
 
             if rid in installed_ids:
                 info(f"Skip repo (already installed): {rid}")
@@ -67,15 +127,25 @@ def _install_repo_entries(title: str, repo_entries, timeout_per_item_s=120):
                 continue
 
             try:
+                # C1: zip included in backup (resolved to zip_path during restore)
                 if zip_path:
-                    info(f"Installing repo from zip: {rid} -> {zip_path}", notify=True)
+                    info(f"Installing repo from local zip: {rid} -> {zip_path}", notify=True)
                     rpc.install_zip(zip_path)
-                else:
-                    # fallback: try install by id
-                    info(f"Installing repo by id (may fail): {rid}", notify=True)
-                    rpc.install_addon(rid)
 
-                ok, why = _wait_until_installed_by_list(rpc, rid, timeout_s=timeout_per_item_s)
+                # C2: zip_url fallback
+                elif zip_url:
+                    local_zip = temp(f"profiler_repo_zips/{rid}.zip")
+                    info(f"Repo zip_url fallback for {rid}: {zip_url}")
+                    _download_to(zip_url, local_zip)
+                    rpc.install_zip(local_zip)
+
+                else:
+                    # Dicts-only policy: no id-only installs
+                    err(f"Repo has no zip_path or zip_url: {rid}", notify=True)
+                    failed.append({"id": rid, "error": "Missing zip_path and zip_url"})
+                    continue
+
+                ok, why = _wait_until_installed_by_list(rpc, rid, timeout_s=timeout_per_repo_s)
                 if ok:
                     installed.append(rid)
                     installed_ids.add(rid)
@@ -88,57 +158,54 @@ def _install_repo_entries(title: str, repo_entries, timeout_per_item_s=120):
                 failed.append({"id": rid, "error": str(e)})
 
         return installed, skipped, failed
+
     finally:
         dialog.close()
 
-def _install_list(title: str, items, timeout_per_item_s: int = 45):
-    """
-    Generic installer for repos OR addons.
-    """
+
+def _install_addons(addon_ids, timeout_per_addon_s: int = 180):
     rpc = JsonRpc()
     _preflight_or_die(rpc)
 
     installed_ids = rpc.get_installed_ids()
 
-    installed = []
-    skipped = []
-    failed = []
+    installed, skipped, failed = [], [], []
 
     dialog = xbmcgui.DialogProgress()
-    dialog.create("Profiler", title)
+    dialog.create("Profiler", "Installing add-ons…")
 
     try:
-        total = len(items) or 1
+        total = len(addon_ids) or 1
 
-        for i, item_id in enumerate(items, start=1):
+        for i, aid in enumerate(addon_ids, start=1):
             if dialog.iscanceled():
-                warn("User cancelled install phase", notify=True)
-                failed.append({"id": item_id, "error": "User cancelled"})
+                warn("User cancelled add-on install phase", notify=True)
+                failed.append({"id": aid, "error": "User cancelled"})
                 break
 
             pct = int((i / total) * 100)
-            dialog.update(pct, f"{title} ({i}/{total}): {item_id}")
+            dialog.update(pct, f"Addon ({i}/{total}): {aid}")
 
-            if item_id in installed_ids:
-                info(f"Skip (already installed): {item_id}")
-                skipped.append(item_id)
+            if aid in installed_ids:
+                info(f"Skip (already installed): {aid}")
+                skipped.append(aid)
                 continue
 
             try:
-                info(f"Install request: {item_id}", notify=True)
-                rpc.install_addon(item_id)
+                info(f"Install request: {aid}", notify=True)
+                rpc.install_addon(aid)
 
-                ok, why = _wait_until_installed_by_list(rpc, item_id, timeout_s=timeout_per_item_s)
+                ok, why = _wait_until_installed_by_list(rpc, aid, timeout_s=timeout_per_addon_s)
                 if ok:
-                    installed.append(item_id)
-                    installed_ids.add(item_id)
+                    installed.append(aid)
+                    installed_ids.add(aid)
                 else:
-                    err(f"Install failed: {item_id} - {why}", notify=True)
-                    failed.append({"id": item_id, "error": why})
+                    err(f"Install failed: {aid} - {why}", notify=True)
+                    failed.append({"id": aid, "error": why})
 
             except Exception as e:
-                exc(f"Exception installing {item_id}: {e}")
-                failed.append({"id": item_id, "error": str(e)})
+                exc(f"Exception installing {aid}: {e}")
+                failed.append({"id": aid, "error": str(e)})
 
         return installed, skipped, failed
 
@@ -146,26 +213,11 @@ def _install_list(title: str, items, timeout_per_item_s: int = 45):
         dialog.close()
 
 
-def _split_repos_and_addons(manifest: dict):
-    """
-    Support your current manifest format.
-    - If manifest["repos"] is empty, auto-detect repos from addons list (repository.*).
-    - Also removes repos from addons list so we don’t install them twice.
-    """
-    repos = (manifest.get("repos") or [])
-    addons = (manifest.get("addons") or [])
-
-    # auto detect repos if repos list not populated
-    if not repos:
-        repos = [a for a in addons if a.startswith("repository.")]
-    # remove repos from addon list
-    addons = [a for a in addons if not a.startswith("repository.")]
-
-    return repos, addons
-
-
 def run_install(manifest: dict):
-    repos, addons = _split_repos_and_addons(manifest)
+    _validate_manifest(manifest)
+
+    repos = manifest.get("repos") or []
+    addons = manifest.get("addons") or []
 
     info(f"run_install: repos={len(repos)} addons={len(addons)}", notify=True)
 
@@ -174,22 +226,21 @@ def run_install(manifest: dict):
         "addons": {"installed": [], "skipped": [], "failed": []},
     }
 
-    # 1) Install repos first (so third-party addons can resolve)
+    # 1) Install repos from zips (C1) or zip_url (C2)
     if repos:
-        r_inst, r_skip, r_fail = _install_repo_entries("Installing repos", repos, timeout_per_item_s=45)
+        r_inst, r_skip, r_fail = _install_repos(repos, timeout_per_repo_s=180)
         report["repos"] = {"installed": r_inst, "skipped": r_skip, "failed": r_fail}
 
-        # If repos failed badly, warn but continue (some addons may still work)
         if r_fail:
             warn(f"{len(r_fail)} repo(s) failed to install. Some addons may not resolve.", notify=True)
 
     # 2) Force refresh after repos are installed
     rpc = JsonRpc()
     rpc.update_addon_repos()
-    xbmc.sleep(5000)  # Firestick needs longer
+    xbmc.sleep(8000)  # Firestick needs longer
 
     # 3) Install addons
-    a_inst, a_skip, a_fail = _install_list("Installing add-ons", addons, timeout_per_item_s=180)
+    a_inst, a_skip, a_fail = _install_addons(addons, timeout_per_addon_s=180)
     report["addons"] = {"installed": a_inst, "skipped": a_skip, "failed": a_fail}
 
     info(

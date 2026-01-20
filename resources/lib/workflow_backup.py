@@ -3,6 +3,7 @@ import xbmcvfs
 import json
 import os
 import glob
+import zipfile
 
 from resources.lib.fileops import ensure_dir, copy_file, walk_dir
 from resources.lib.manifest import build_manifest
@@ -82,6 +83,7 @@ def backup_to_b2(build_name: str, b2_key_id: str, b2_app_key: str, b2_bucket: st
             copy_file(src_zip, dst_zip)
             repo["zip_in_backup"] = f"repos/{out_name}"
             repo["zip_url"] = ""
+            repo["zip_path"] = ""
             continue
 
         # Fallback C1b: build a zip from installed repo folder
@@ -91,6 +93,7 @@ def backup_to_b2(build_name: str, b2_key_id: str, b2_app_key: str, b2_bucket: st
         _zip_installed_repo_folder(rid, dst_zip)
         repo["zip_in_backup"] = f"repos/{out_name}"
         repo["zip_url"] = ""
+        repo["zip_path"] = ""
 
     with open(os.path.join(staging, "manifest.json"), "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2)
@@ -123,16 +126,27 @@ def backup_to_b2(build_name: str, b2_key_id: str, b2_app_key: str, b2_bucket: st
     # local-only return
     return {"zip": out_zip, "remote_name": "", "manifest": manifest}
 
-def _find_latest_repo_zip_in_packages(repo_id: str) -> str:
+def _zip_installed_repo_folder(repo_id: str, out_zip: str):
     """
-    Looks for the repo zip Kodi downloaded previously:
-    special://home/addons/packages/<repoid>-*.zip
-    Returns file path or "".
+    Fallback C1b: build a Kodi-installable repo zip from the installed repo folder.
+    Zip must contain ONE top-level folder named repo_id.
     """
-    pkg_dir = home("addons/packages")
-    pattern = os.path.join(pkg_dir, f"{repo_id}-*.zip")
-    matches = sorted(glob.glob(pattern), key=lambda p: os.path.getmtime(p), reverse=True)
-    return matches[0] if matches else ""
+    src_dir = home(f"addons/{repo_id}")
+    if not os.path.isdir(src_dir):
+        raise RuntimeError(f"Repo folder not found for {repo_id}: {src_dir}")
+
+    ensure_dir(os.path.dirname(out_zip))
+
+    # Create zip with proper top-level folder: repo_id/...
+    with zipfile.ZipFile(out_zip, "w", compression=zipfile.ZIP_DEFLATED) as z:
+        for root, _, files in os.walk(src_dir):
+            rel_root = os.path.relpath(root, src_dir)
+            rel_root = "" if rel_root == "." else rel_root
+
+            for fn in files:
+                full_path = os.path.join(root, fn)
+                arc_path = f"{repo_id}/" + (f"{rel_root}/" if rel_root else "") + fn
+                z.write(full_path, arc_path)
 
 def _zip_installed_repo_folder(repo_id: str, out_zip: str):
     """

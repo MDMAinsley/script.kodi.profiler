@@ -44,10 +44,6 @@ class JsonRpc:
     # --- Add-on listing (Firestick-safe) ---
 
     def get_installed_addons(self) -> List[Dict[str, Any]]:
-        """
-        Returns list of installed addons: [{"addonid": "..."}]
-        This call is supported broadly and works on Firestick.
-        """
         res = self.call("Addons.GetAddons", {"installed": True})
         return res.get("addons", []) or []
 
@@ -57,26 +53,22 @@ class JsonRpc:
     def update_addon_repos(self):
         info("UpdateAddonRepos builtin")
         xbmc.executebuiltin("UpdateAddonRepos")
-        
+
+    # --- Settings ---
+
     def set_setting(self, setting: str, value):
         info(f"Setting {setting} -> {value}")
-        return self.call(
-            "Settings.SetSettingValue",
-            {"setting": setting, "value": value}
-        )
+        return self.call("Settings.SetSettingValue", {"setting": setting, "value": value})
 
     def get_setting(self, setting: str):
         info(f"Get setting {setting}")
-        return self.call(
-            "Settings.GetSettingValue",
-            {"setting": setting}
-        )
+        return self.call("Settings.GetSettingValue", {"setting": setting})
 
     # --- Install request (fallback to builtin) ---
 
     def install_addon(self, addon_id: str) -> bool:
         """
-        Request install. Completion is monitored by addon_installer.py.
+        Request install by ID (not zip). Completion is monitored by addon_installer.py.
         Firestick often lacks Addons.Install JSON-RPC, so fallback to builtin.
         """
         info(f"Install request: {addon_id}")
@@ -88,17 +80,16 @@ class JsonRpc:
             if "Method not found" in s or "'code': -32601" in s:
                 warn(f"Addons.Install not available, using builtin InstallAddon({addon_id})")
                 xbmc.executebuiltin(f"InstallAddon({addon_id})")
-                # give Kodi a chance to pop dialogs / start job
                 wait_for_modal_to_close(timeout_ms=60000)
                 return True
             raise
-            
+
     def install_zip(self, zip_path: str):
         """
-        Install a local zip file (repo add-on) using builtin.
-        Works on Firestick.
+        Install a LOCAL zip file (repo zip) reliably on Firestick.
+        Use InstallAddon(<zip_path>) — works across versions.
         """
         info(f"Install zip: {zip_path}")
-        # Quote path to survive spaces
-        xbmc.executebuiltin(f'InstallFromZip("{zip_path}")')
+        # InstallAddon accepts a local zip path
+        xbmc.executebuiltin(f'InstallAddon("{zip_path}")')
         wait_for_modal_to_close(timeout_ms=60000)
