@@ -61,7 +61,7 @@ def _install_repo_from_backup_zip(repo_id: str, zip_abs_path: str, timeout_s: in
 
     # Install by ID (silent)
     info(f"Installing repo via InstallAddon(id): {repo_id}", notify=True)
-    xbmc.executebuiltin(f"InstallAddon({repo_id})")
+    xbmc.executebuiltin(f"InstallAddon({dst_zip})")
 
     # Wait for extracted folder
     addon_dir = home(f"addons/{repo_id}")
