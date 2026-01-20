@@ -2,12 +2,15 @@ import xbmc
 import xbmcvfs
 import json
 import os
+import glob
 
-from resources.lib.paths import profile, temp
 from resources.lib.fileops import ensure_dir, copy_file, walk_dir
 from resources.lib.manifest import build_manifest
 from resources.lib.zipops import zip_from_dir
 from resources.lib.b2 import B2Client
+from resources.lib.log import info, warn, err, exc
+from resources.lib.paths import profile, temp, home
+
 
 PORTABLE_FILES = [
     "sources.xml",
@@ -30,7 +33,7 @@ def backup_to_b2(build_name: str, b2_key_id: str, b2_app_key: str, b2_bucket: st
 
     for f in PORTABLE_FILES:
         src = profile(f)
-        log(f"FILE src={src} exists={os.path.exists(src)}")
+        info(f"FILE src={src} exists={os.path.exists(src)}")
         if xbmcvfs.exists(src):
             dst = os.path.join(user_stage, f)
             copy_file(src, dst)
@@ -48,7 +51,7 @@ def backup_to_b2(build_name: str, b2_key_id: str, b2_app_key: str, b2_bucket: st
     # 3) copy portable dirs (merge into staging)
     for d in PORTABLE_DIRS_LOCAL:
         src_root = profile(d)
-        log(f"DIR src={src_root} exists={os.path.exists(src_root)}")
+        info(f"DIR src={src_root} exists={os.path.exists(src_root)}")
         if not os.path.isdir(src_root):
             continue
         dst_root = os.path.join(user_stage, d)
@@ -63,6 +66,32 @@ def backup_to_b2(build_name: str, b2_key_id: str, b2_app_key: str, b2_bucket: st
 
     # 4) manifest + report
     manifest = build_manifest()
+    repos_stage = os.path.join(staging, "repos")
+    ensure_dir(repos_stage)
+
+    for repo in manifest.get("repos", []):
+        rid = repo["id"]
+
+        # Try C1: grab the zip Kodi originally downloaded
+        src_zip = _find_latest_repo_zip_in_packages(rid)
+
+        if src_zip and os.path.isfile(src_zip):
+            out_name = os.path.basename(src_zip)
+            dst_zip = os.path.join(repos_stage, out_name)
+            info(f"Repo zip (packages) {rid}: {src_zip} -> {dst_zip}")
+            copy_file(src_zip, dst_zip)
+            repo["zip_in_backup"] = f"repos/{out_name}"
+            repo["zip_url"] = ""
+            continue
+
+        # Fallback C1b: build a zip from installed repo folder
+        out_name = f"{rid}.zip"
+        dst_zip = os.path.join(repos_stage, out_name)
+        info(f"Repo zip (generated) {rid}: {dst_zip}")
+        _zip_installed_repo_folder(rid, dst_zip)
+        repo["zip_in_backup"] = f"repos/{out_name}"
+        repo["zip_url"] = ""
+
     with open(os.path.join(staging, "manifest.json"), "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2)
 
@@ -94,5 +123,23 @@ def backup_to_b2(build_name: str, b2_key_id: str, b2_app_key: str, b2_bucket: st
     # local-only return
     return {"zip": out_zip, "remote_name": "", "manifest": manifest}
 
-def log(msg):
-    xbmc.log(f"[Profiler] {msg}", xbmc.LOGINFO)
+def _find_latest_repo_zip_in_packages(repo_id: str) -> str:
+    """
+    Looks for the repo zip Kodi downloaded previously:
+    special://home/addons/packages/<repoid>-*.zip
+    Returns file path or "".
+    """
+    pkg_dir = home("addons/packages")
+    pattern = os.path.join(pkg_dir, f"{repo_id}-*.zip")
+    matches = sorted(glob.glob(pattern), key=lambda p: os.path.getmtime(p), reverse=True)
+    return matches[0] if matches else ""
+
+def _zip_installed_repo_folder(repo_id: str, out_zip: str):
+    """
+    Fallback: zip the installed repo add-on folder.
+    special://home/addons/<repo_id>/
+    """
+    src_dir = home(f"addons/{repo_id}")
+    if not os.path.isdir(src_dir):
+        raise RuntimeError(f"Repo folder not found for {repo_id}: {src_dir}")
+    zip_from_dir(src_dir, out_zip)

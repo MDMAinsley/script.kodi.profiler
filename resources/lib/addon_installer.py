@@ -15,7 +15,7 @@ def _preflight_or_die(rpc: JsonRpc):
         raise
 
 
-def _wait_until_installed_by_list(rpc: JsonRpc, addon_id: str, timeout_s: int = 180):
+def _wait_until_installed_by_list(rpc: JsonRpc, addon_id: str, timeout_s: int = 45):
     """
     Firestick-safe: poll Addons.GetAddons(installed=True) and check for addonid.
     """
@@ -41,6 +41,55 @@ def _wait_until_installed_by_list(rpc: JsonRpc, addon_id: str, timeout_s: int = 
 
         xbmc.sleep(1000)
 
+def _install_repo_entries(title: str, repo_entries, timeout_per_item_s=120):
+    rpc = JsonRpc()
+    _preflight_or_die(rpc)
+    installed_ids = rpc.get_installed_ids()
+
+    installed, skipped, failed = [], [], []
+
+    dialog = xbmcgui.DialogProgress()
+    dialog.create("Profiler", title)
+
+    try:
+        total = len(repo_entries) or 1
+
+        for i, repo in enumerate(repo_entries, start=1):
+            rid = repo["id"]
+            zip_path = repo.get("zip_path") or ""
+
+            pct = int((i / total) * 100)
+            dialog.update(pct, f"{title} ({i}/{total}): {rid}")
+
+            if rid in installed_ids:
+                info(f"Skip repo (already installed): {rid}")
+                skipped.append(rid)
+                continue
+
+            try:
+                if zip_path:
+                    info(f"Installing repo from zip: {rid} -> {zip_path}", notify=True)
+                    rpc.install_zip(zip_path)
+                else:
+                    # fallback: try install by id
+                    info(f"Installing repo by id (may fail): {rid}", notify=True)
+                    rpc.install_addon(rid)
+
+                ok, why = _wait_until_installed_by_list(rpc, rid, timeout_s=timeout_per_item_s)
+                if ok:
+                    installed.append(rid)
+                    installed_ids.add(rid)
+                else:
+                    err(f"Repo install failed: {rid} - {why}", notify=True)
+                    failed.append({"id": rid, "error": why})
+
+            except Exception as e:
+                exc(f"Exception installing repo {rid}: {e}")
+                failed.append({"id": rid, "error": str(e)})
+
+        return installed, skipped, failed
+    finally:
+        dialog.close()
 
 def _install_list(title: str, items, timeout_per_item_s: int = 45):
     """
@@ -127,7 +176,7 @@ def run_install(manifest: dict):
 
     # 1) Install repos first (so third-party addons can resolve)
     if repos:
-        r_inst, r_skip, r_fail = _install_list("Installing repos", repos, timeout_per_item_s=45)
+        r_inst, r_skip, r_fail = _install_repo_entries("Installing repos", repos, timeout_per_item_s=45)
         report["repos"] = {"installed": r_inst, "skipped": r_skip, "failed": r_fail}
 
         # If repos failed badly, warn but continue (some addons may still work)

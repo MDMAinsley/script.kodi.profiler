@@ -2,42 +2,21 @@ from resources.lib.jsonrpc import JsonRpc
 
 def build_manifest() -> dict:
     rpc = JsonRpc()
-    
+
     skin = rpc.call("Settings.GetSettingValue", {"setting": "lookandfeel.skin"}).get("value", "")
 
-    result = rpc.call("Addons.GetAddons", {
-        "installed": True,
-        "properties": ["name", "version", "enabled"]  # removed "type"
-    })
-
+    result = rpc.call("Addons.GetAddons", {"installed": True})
     addons = result.get("addons", []) or []
 
-    repo_ids = []
-    addon_ids = []
+    addon_ids = sorted({a.get("addonid") for a in addons if a.get("addonid")})
 
-    for a in addons:
-        addonid = a.get("addonid")
-        if not addonid:
-            continue
-
-        # Fetch details to get the type (repo vs normal addon)
-        try:
-            details = rpc.call("Addons.GetAddonDetails", {
-                "addonid": addonid,
-                "properties": ["type"]
-            })
-            atype = (details.get("addon", {}) or {}).get("type", "")
-        except Exception:
-            atype = ""
-
-        if atype == "xbmc.addon.repository":
-            repo_ids.append(addonid)
-        else:
-            addon_ids.append(addonid)
+    # Repos are just addons with id starting with repository.
+    repo_ids = sorted([a for a in addon_ids if a.startswith("repository.")])
+    addon_ids = sorted([a for a in addon_ids if not a.startswith("repository.")])
 
     return {
         "kodi_major": 21,
         "active_skin": skin,
-        "repos": sorted(set(repo_ids)),
-        "addons": sorted(set(addon_ids)),
+        "repos": [{"id": rid, "zip_in_backup": "", "zip_url": ""} for rid in repo_ids],
+        "addons": addon_ids,
     }

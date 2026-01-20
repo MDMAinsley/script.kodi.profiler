@@ -92,3 +92,13 @@ class JsonRpc:
                 wait_for_modal_to_close(timeout_ms=60000)
                 return True
             raise
+            
+    def install_zip(self, zip_path: str):
+        """
+        Install a local zip file (repo add-on) using builtin.
+        Works on Firestick.
+        """
+        info(f"Install zip: {zip_path}")
+        # Quote path to survive spaces
+        xbmc.executebuiltin(f'InstallFromZip("{zip_path}")')
+        wait_for_modal_to_close(timeout_ms=60000)

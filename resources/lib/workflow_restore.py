@@ -48,5 +48,12 @@ def restore_from_b2(remote_name: str, b2_key_id: str, b2_app_key: str, b2_bucket
 
     with open(manifest_path, "r", encoding="utf-8") as f:
         manifest = json.load(f)
+        
+    repos_dir = os.path.join(staging, "repos")
+    for repo in manifest.get("repos", []):
+        rel = repo.get("zip_in_backup") or ""
+        if rel:
+            abs_zip = os.path.join(staging, rel.replace("/", os.sep))
+            repo["zip_path"] = abs_zip
 
     return manifest

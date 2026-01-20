@@ -1,8 +1,12 @@
 import xbmcvfs
 
 def tr(path: str) -> str:
-    # Kodi v19+ replacement for xbmc.translatePath
-    return xbmcvfs.translatePath(path)  # :contentReference[oaicite:7]{index=7}
+    return xbmcvfs.translatePath(path)
+
+def home(path: str = "") -> str:
+    if path and not path.startswith("/"):
+        path = "/" + path
+    return tr("special://home" + path)
 
 def profile(path: str) -> str:
     if not path.startswith("/"):
