@@ -47,7 +47,7 @@ def _preflight_or_die(rpc: JsonRpc):
         raise
 
 
-def _wait_until_installed_by_list(rpc: JsonRpc, addon_id: str, timeout_s: int = 180):
+def _wait_until_installed_by_list(rpc: JsonRpc, addon_id: str, timeout_s: int = 45):
     """
     Firestick-safe: poll Addons.GetAddons(installed=True) and check for addonid.
     """
@@ -96,7 +96,7 @@ def _validate_manifest(manifest: dict):
             raise RuntimeError("Manifest invalid: addons list must not contain repository.* IDs")
 
 
-def _install_repos(repo_entries, timeout_per_repo_s: int = 180):
+def _install_repos(repo_entries, timeout_per_repo_s: int = 45):
     rpc = JsonRpc()
     _preflight_or_die(rpc)
 
@@ -138,6 +138,8 @@ def _install_repos(repo_entries, timeout_per_repo_s: int = 180):
                 if zip_path:
                     info(f"Installing repo from local zip: {rid} -> {zip_path}", notify=True)
                     rpc.install_zip(zip_path)
+                    addon_folder = home(f"addons/{rid}")
+                    info(f"Post-install check: addon folder exists={os.path.isdir(addon_folder)} path={addon_folder}")
 
                 # C2: zip_url fallback
                 elif zip_url:
@@ -145,6 +147,8 @@ def _install_repos(repo_entries, timeout_per_repo_s: int = 180):
                     info(f"Repo zip_url fallback for {rid}: {zip_url}")
                     _download_to(zip_url, local_zip)
                     rpc.install_zip(local_zip)
+                    addon_folder = home(f"addons/{rid}")
+                    info(f"Post-install check: addon folder exists={os.path.isdir(addon_folder)} path={addon_folder}")
 
                 else:
                     # Dicts-only policy: no id-only installs
@@ -170,7 +174,7 @@ def _install_repos(repo_entries, timeout_per_repo_s: int = 180):
         dialog.close()
 
 
-def _install_addons(addon_ids, timeout_per_addon_s: int = 180):
+def _install_addons(addon_ids, timeout_per_addon_s: int = 45):
     rpc = JsonRpc()
     _preflight_or_die(rpc)
 
@@ -235,7 +239,7 @@ def run_install(manifest: dict):
 
     # 1) Install repos from zips (C1) or zip_url (C2)
     if repos:
-        r_inst, r_skip, r_fail = _install_repos(repos, timeout_per_repo_s=180)
+        r_inst, r_skip, r_fail = _install_repos(repos, timeout_per_repo_s=45)
         report["repos"] = {"installed": r_inst, "skipped": r_skip, "failed": r_fail}
 
         if r_fail:
@@ -247,7 +251,7 @@ def run_install(manifest: dict):
     xbmc.sleep(8000)  # Firestick needs longer
 
     # 3) Install addons
-    a_inst, a_skip, a_fail = _install_addons(addons, timeout_per_addon_s=180)
+    a_inst, a_skip, a_fail = _install_addons(addons, timeout_per_addon_s=45)
     report["addons"] = {"installed": a_inst, "skipped": a_skip, "failed": a_fail}
 
     info(
