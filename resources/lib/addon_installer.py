@@ -1,5 +1,7 @@
 import os
 import time
+import zipfile
+import shutil
 import xbmc
 import xbmcgui
 import xbmcvfs
@@ -7,15 +9,27 @@ import urllib.request
 
 from resources.lib.jsonrpc import JsonRpc
 from resources.lib.log import info, warn, err, exc
-from resources.lib.paths import temp
-from resources.lib.paths import home
+from resources.lib.paths import temp, home
 
+# Kodi's official built-in repo - skip it always
 BUILTIN_REPOS = {"repository.xbmc.org"}
 
+
+# -------------------------
+# helpers
+# -------------------------
 
 def _ensure_dir(path: str):
     if not xbmcvfs.exists(path):
         xbmcvfs.mkdirs(path)
+
+
+def _safe_rmtree(path: str):
+    try:
+        if os.path.isdir(path):
+            shutil.rmtree(path)
+    except Exception as e:
+        warn(f"Failed to remove folder {path}: {e}")
 
 
 def _download_to(url: str, dst_path: str):
@@ -26,7 +40,6 @@ def _download_to(url: str, dst_path: str):
     info(f"Downloading: {url} -> {dst_path}", notify=True)
     _ensure_dir(os.path.dirname(dst_path))
 
-    # urllib wants a normal filesystem path; dst_path already is translated via temp()
     with urllib.request.urlopen(url, timeout=60) as r:
         with open(dst_path, "wb") as f:
             while True:
@@ -37,6 +50,71 @@ def _download_to(url: str, dst_path: str):
 
     if not os.path.isfile(dst_path) or os.path.getsize(dst_path) < 1024:
         raise RuntimeError(f"Downloaded file looks wrong: {dst_path}")
+
+
+def _zip_has_expected_top_folder(zip_path: str, expected_folder: str) -> bool:
+    """
+    Validate that zip contains expected_folder/... as top-level.
+    Example: repository.cocoscrapers/addon.xml
+    """
+    expected_prefix = expected_folder.rstrip("/") + "/"
+    try:
+        with zipfile.ZipFile(zip_path, "r") as z:
+            names = z.namelist()
+            return any(n.startswith(expected_prefix) for n in names)
+    except Exception:
+        return False
+
+
+def install_repo_zip_locally(repo_id: str, zip_path: str, timeout_s: int = 30) -> (bool, str):
+    """
+    Firestick-safe repo "install":
+    - unzip repo zip into special://home/addons/
+    - UpdateLocalAddons (so Kodi registers it)
+    - EnableAddon(repo_id)
+    - wait for folder + optionally installed list
+    """
+    addons_dir = home("addons")
+    dest_dir = os.path.join(addons_dir, repo_id)
+
+    info(f"Installing repo by extract: {repo_id} zip={zip_path}", notify=True)
+
+    if not os.path.isfile(zip_path):
+        return False, f"Repo zip missing: {zip_path}"
+
+    # sanity: correct zip layout
+    if not _zip_has_expected_top_folder(zip_path, repo_id):
+        return False, f"Zip layout invalid (missing top folder '{repo_id}/')"
+
+    # wipe existing repo folder (avoid mixed old/new)
+    _safe_rmtree(dest_dir)
+
+    # extract into addons root
+    try:
+        _ensure_dir(addons_dir)
+        with zipfile.ZipFile(zip_path, "r") as z:
+            z.extractall(addons_dir)
+    except Exception as e:
+        return False, f"Extract failed: {e}"
+
+    # wait for folder to appear (filesystem)
+    start = time.time()
+    while True:
+        if os.path.isdir(dest_dir):
+            break
+        if time.time() - start >= timeout_s:
+            return False, f"Folder never appeared after extract: {dest_dir}"
+        xbmc.sleep(500)
+
+    # tell Kodi to rescan local addons
+    xbmc.executebuiltin("UpdateLocalAddons")
+    xbmc.sleep(1500)
+
+    # enable it (harmless if already enabled)
+    xbmc.executebuiltin(f"EnableAddon({repo_id})")
+    xbmc.sleep(1500)
+
+    return True, ""
 
 
 def _preflight_or_die(rpc: JsonRpc):
@@ -97,12 +175,15 @@ def _validate_manifest(manifest: dict):
             raise RuntimeError("Manifest invalid: addons list must not contain repository.* IDs")
 
 
+# -------------------------
+# install logic
+# -------------------------
+
 def _install_repos(repo_entries, timeout_per_repo_s: int = 45):
     rpc = JsonRpc()
     _preflight_or_die(rpc)
 
     installed_ids = rpc.get_installed_ids()
-
     installed, skipped, failed = [], [], []
 
     dialog = xbmcgui.DialogProgress()
@@ -124,7 +205,8 @@ def _install_repos(repo_entries, timeout_per_repo_s: int = 45):
             pct = int((i / total) * 100)
             dialog.update(pct, f"Repo ({i}/{total}): {rid}")
 
-            if rid in BUILTIN_REPOS and not zip_path and not zip_url:
+            # Always skip Kodi built-in repo
+            if rid in BUILTIN_REPOS:
                 info(f"Skip built-in repo: {rid}")
                 skipped.append(rid)
                 continue
@@ -135,55 +217,29 @@ def _install_repos(repo_entries, timeout_per_repo_s: int = 45):
                 continue
 
             try:
-                # C1: zip included in backup (resolved to zip_path during restore)
-                if zip_path:
-                    info(f"Installing repo from local zip: {rid} -> {zip_path}", notify=True)
-                    rpc.install_zip(zip_path)
-                    
-                    xbmc.sleep(5000)
-                    addon_folder = home(f"addons/{rid}")
-                    info(f"Post-install check: addon folder exists={os.path.isdir(addon_folder)} path={addon_folder}")
-                    
-                    if not os.path.isdir(home(f"addons/{rid}")):
-                        err(f"Zip install did not extract addon folder for {rid}. Addon DB may be broken.", notify=True)
-                        failed.append({"id": rid, "error": f"Zip install did not extract addon folder for {rid}."})
-                        continue
-    
-                    rpc.update_addon_repos()
-                    xbmc.sleep(2000)
-
-                # C2: zip_url fallback
-                elif zip_url:
-                    local_zip = temp(f"profiler_repo_zips/{rid}.zip")
+                # If we only have URL, download it to temp
+                if not zip_path and zip_url:
+                    zip_path = temp(f"profiler_repo_zips/{rid}.zip")
                     info(f"Repo zip_url fallback for {rid}: {zip_url}")
-                    _download_to(zip_url, local_zip)
-                    rpc.install_zip(local_zip)
-                    
-                    xbmc.sleep(5000)
-                    addon_folder = home(f"addons/{rid}")
-                    info(f"Post-install check: addon folder exists={os.path.isdir(addon_folder)} path={addon_folder}")
-                    
-                    if not os.path.isdir(home(f"addons/{rid}")):
-                        err(f"Zip install did not extract addon folder for {rid}. Addon DB may be broken.", notify=True)
-                        failed.append({"id": rid, "error": f"Zip install did not extract addon folder for {rid}."})
-                        continue
-    
-                    rpc.update_addon_repos()
-                    xbmc.sleep(2000)
+                    _download_to(zip_url, zip_path)
 
-                else:
-                    # Dicts-only policy: no id-only installs
+                if not zip_path:
                     err(f"Repo has no zip_path or zip_url: {rid}", notify=True)
                     failed.append({"id": rid, "error": "Missing zip_path and zip_url"})
                     continue
 
-                ok, why = _wait_until_installed_by_list(rpc, rid, timeout_s=timeout_per_repo_s)
-                if ok:
-                    installed.append(rid)
-                    installed_ids.add(rid)
-                else:
+                ok, why = install_repo_zip_locally(rid, zip_path, timeout_s=timeout_per_repo_s)
+                if not ok:
                     err(f"Repo install failed: {rid} - {why}", notify=True)
                     failed.append({"id": rid, "error": why})
+                    continue
+
+                # refresh repos list after each successful repo install (helps Firestick)
+                xbmc.executebuiltin("UpdateLocalAddons")
+                xbmc.sleep(1500)
+
+                installed.append(rid)
+                installed_ids.add(rid)
 
             except Exception as e:
                 exc(f"Exception installing repo {rid}: {e}")
@@ -258,7 +314,7 @@ def run_install(manifest: dict):
         "addons": {"installed": [], "skipped": [], "failed": []},
     }
 
-    # 1) Install repos from zips (C1) or zip_url (C2)
+    # 1) Install repos using EXTRACT method
     if repos:
         r_inst, r_skip, r_fail = _install_repos(repos, timeout_per_repo_s=45)
         report["repos"] = {"installed": r_inst, "skipped": r_skip, "failed": r_fail}
@@ -268,6 +324,9 @@ def run_install(manifest: dict):
 
     # 2) Force refresh after repos are installed
     rpc = JsonRpc()
+    xbmc.executebuiltin("UpdateLocalAddons")
+    xbmc.sleep(2000)
+
     rpc.update_addon_repos()
     xbmc.sleep(8000)  # Firestick needs longer
 
