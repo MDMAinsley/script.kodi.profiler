@@ -1,14 +1,14 @@
 import json
 import time
 import xbmc
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 try:
     from .uiwait import wait_for_modal_to_close
-    from .log import info, warn, err, exc, log
+    from .log import info, warn, err
 except Exception:
     from uiwait import wait_for_modal_to_close
-    from log import info, warn, err, exc, log
+    from log import info, warn, err
 
 
 class JsonRpc:
@@ -36,61 +36,45 @@ class JsonRpc:
             raise
 
         if "error" in data:
-            # include method and the full error object
             err(f"JSON-RPC error for {method} ({ms}ms): {data['error']}")
             raise RuntimeError(f"JSON-RPC error {data['error']}")
 
-        # useful to see long/slow calls when debugging firestick
-        if ms > 750:
-            warn(f"JSON-RPC slow call {method}: {ms}ms")
-
         return data.get("result", {})
 
-    def introspect(self) -> Dict[str, Any]:
-        info("JSON-RPC introspect")
-        return self.call("JSONRPC.Introspect")
+    # --- Add-on listing (Firestick-safe) ---
 
-    def set_setting(self, setting: str, value: Any) -> Dict[str, Any]:
-        info(f"Setting {setting} -> {value}")
-        return self.call("Settings.SetSettingValue", {"setting": setting, "value": value})
+    def get_installed_addons(self) -> List[Dict[str, Any]]:
+        """
+        Returns list of installed addons: [{"addonid": "..."}]
+        This call is supported broadly and works on Firestick.
+        """
+        res = self.call("Addons.GetAddons", {"installed": True})
+        return res.get("addons", []) or []
 
-    def get_setting(self, setting: str):
-        info(f"Get setting {setting}")
-        return self.call("Settings.GetSettingValue", {"setting": setting})
+    def get_installed_ids(self) -> set:
+        return {a.get("addonid") for a in self.get_installed_addons() if a.get("addonid")}
 
-    def quit_app(self) -> Dict[str, Any]:
-        info("Application.Quit requested")
-        return self.call("Application.Quit")
+    def update_addon_repos(self):
+        info("UpdateAddonRepos builtin")
+        xbmc.executebuiltin("UpdateAddonRepos")
+
+    # --- Install request (fallback to builtin) ---
 
     def install_addon(self, addon_id: str) -> bool:
         """
-        Request install. This does NOT guarantee completion.
-        We'll monitor completion in addon_installer.py.
+        Request install. Completion is monitored by addon_installer.py.
+        Firestick often lacks Addons.Install JSON-RPC, so fallback to builtin.
         """
         info(f"Install request: {addon_id}")
         try:
-            # Kodi JSON-RPC install method
             self.call("Addons.Install", {"addonid": addon_id})
             return True
         except Exception as e:
-            # Fall back to builtin if method missing
             s = str(e)
             if "Method not found" in s or "'code': -32601" in s:
                 warn(f"Addons.Install not available, using builtin InstallAddon({addon_id})")
                 xbmc.executebuiltin(f"InstallAddon({addon_id})")
+                # give Kodi a chance to pop dialogs / start job
                 wait_for_modal_to_close(timeout_ms=60000)
                 return True
             raise
-
-    def is_addon_installed(self, addon_id: str) -> bool:
-        try:
-            res = self.call("Addons.GetAddonDetails", {"addonid": addon_id, "properties": ["enabled", "version"]})
-            return "addon" in res
-        except Exception:
-            return False
-
-    def get_addon_details(self, addon_id: str) -> Dict[str, Any]:
-        return self.call("Addons.GetAddonDetails", {"addonid": addon_id, "properties": ["enabled", "version", "name"]})
-
-    def get_installed_addons(self):
-        return self.call("Addons.GetAddons", {"installed": True, "properties": ["addonid", "type"]}).get("addons", [])
