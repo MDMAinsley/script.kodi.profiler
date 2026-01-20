@@ -1,140 +1,135 @@
+import time
 import xbmc
+import xbmcgui
+
 from resources.lib.jsonrpc import JsonRpc
+from resources.lib.log import info, warn, err, exc, log
 
-
-def _wait_until_installed(rpc, addon_id, timeout_ms=60000):
-    waited = 0
-    step = 500
-
-    while waited < timeout_ms:
-        try:
-            res = rpc.call("Addons.GetAddonDetails", {"addonid": addon_id, "properties": ["enabled"]})
-            if "addon" in res:
-                return True
-        except Exception:
-            pass
-
-        xbmc.sleep(step)
-        waited += step
-
-    return False
 
 def _get_installed_ids(rpc: JsonRpc):
-    """
-    Returns a set of addonids currently installed on this Kodi instance.
-    One JSON-RPC call (fast).
-    """
     res = rpc.call("Addons.GetAddons", {"installed": True})
     addons = res.get("addons", []) or []
     return {a.get("addonid") for a in addons if a.get("addonid")}
 
 
-def install_repositories(repo_ids, settle_ms=5000):
+def _wait_until_installed(rpc: JsonRpc, addon_id: str, timeout_s: int = 180):
     """
-    Installs repository add-ons first.
-    Returns (installed, skipped, failed)
+    Poll until addon shows up as installed (GetAddonDetails works).
+    Logs progress every few seconds.
     """
+    start = time.time()
+    last_log = 0
+
+    while True:
+        elapsed = int(time.time() - start)
+        if elapsed >= timeout_s:
+            return False, f"Timed out after {timeout_s}s"
+
+        # log heartbeat every 5s so we can see it's alive
+        if elapsed - last_log >= 5:
+            info(f"Waiting for install: {addon_id} ({elapsed}s/{timeout_s}s)")
+            last_log = elapsed
+
+        try:
+            if rpc.is_addon_installed(addon_id):
+                details = rpc.get_addon_details(addon_id).get("addon", {})
+                ver = details.get("version", "?")
+                enabled = details.get("enabled", None)
+                info(f"Installed: {addon_id} version={ver} enabled={enabled}")
+                return True, ""
+        except Exception as e:
+            # don't hide it — log once in a while
+            warn(f"GetAddonDetails failed while waiting: {addon_id} ({e})")
+
+        xbmc.sleep(1000)
+
+
+def _preflight_or_die(rpc: JsonRpc):
+    """
+    If Kodi’s addon system is broken, fail loudly.
+    """
+    try:
+        rpc.call("Addons.GetAddons", {"installed": True})
+        info("Addon system preflight OK")
+    except Exception:
+        exc("Addon system preflight failed (JSON-RPC Addons.GetAddons). Addon DB may be broken.")
+        raise
+
+
+def install_addons(addon_ids, timeout_per_addon_s=180):
     rpc = JsonRpc()
+    _preflight_or_die(rpc)
+
     installed_ids = _get_installed_ids(rpc)
 
     installed = []
     skipped = []
     failed = []
 
-    for rid in repo_ids:
-        if rid in installed_ids:
-            skipped.append(rid)
-            continue
+    dialog = xbmcgui.DialogProgress()
+    dialog.create("Profiler", "Installing add-ons…")
 
-        try:
-            xbmc.log(f"[Profiler] Installing repo {rid}", xbmc.LOGINFO)
-            rpc.install_addon(rid)
-            installed.append(rid)
-        except Exception as e:
-            failed.append({"id": rid, "error": str(e)})
+    try:
+        total = len(addon_ids) or 1
 
-    # give Kodi time to fetch repo metadata before installing dependent addons
-    if settle_ms and (installed or skipped):
-        xbmc.sleep(settle_ms)
+        for i, aid in enumerate(addon_ids, start=1):
+            if dialog.iscanceled():
+                warn("User cancelled add-on install phase", notify=True)
+                failed.append({"id": aid, "error": "User cancelled"})
+                break
 
-    return installed, skipped, failed
+            pct = int((i / total) * 100)
+            dialog.update(pct, f"{i}/{total}", f"Installing: {aid}")
 
-def install_addons(addon_ids):
-    """
-    Installs non-repo add-ons.
-    Returns (installed, skipped, failed)
-    """
-    rpc = JsonRpc()
-    installed_ids = _get_installed_ids(rpc)
+            if aid in installed_ids:
+                info(f"Skip (already installed): {aid}")
+                skipped.append(aid)
+                continue
 
-    installed = []
-    skipped = []
-    failed = []
-    requested = []
+            try:
+                info(f"Install request: {aid}", notify=True)
+                rpc.install_addon(aid)
 
-    # Request installs
-    for aid in addon_ids:
-        if aid in installed_ids:
-            skipped.append(aid)
-            continue
+                ok, why = _wait_until_installed(rpc, aid, timeout_s=timeout_per_addon_s)
+                if ok:
+                    installed.append(aid)
+                    installed_ids.add(aid)
+                else:
+                    err(f"Install failed: {aid} - {why}", notify=True)
+                    failed.append({"id": aid, "error": why})
 
-        try:
-            xbmc.log(f"[Profiler] Installing addon {aid}", xbmc.LOGINFO)
-            rpc.install_addon(aid)          # may show confirm prompt; your JsonRpc now waits for it
-            requested.append(aid)
-        except Exception as e:
-            failed.append({"id": aid, "error": str(e)})
+            except Exception as e:
+                exc(f"Exception installing {aid}: {e}")
+                failed.append({"id": aid, "error": str(e)})
 
-    if not requested:
         return installed, skipped, failed
 
-    # Give Kodi a moment to start background install jobs
-    xbmc.sleep(1500)
+    finally:
+        dialog.close()
 
-    # Re-check installed list once
-    installed_after = _get_installed_ids(rpc)
-
-    # Resolve requested -> installed/failed (iterate over a copy)
-    for aid in list(requested):
-        if aid in installed_after:
-            installed.append(aid)
-            continue
-
-        # Poll for completion
-        if _wait_until_installed(rpc, aid, timeout_ms=60000):
-            installed.append(aid)
-        else:
-            failed.append({"id": aid, "error": "Install requested but not installed after waiting"})
-
-    return installed, skipped, failed
 
 def run_install(manifest: dict):
     """
-    Main entry point to install repos then addons using your manifest format.
     manifest = {"repos": [...], "addons": [...]}
-    Returns a report dict you can show to the user.
     """
     repos = manifest.get("repos", []) or []
     addons = manifest.get("addons", []) or []
 
-    repo_installed, repo_skipped, repo_failed = install_repositories(repos)
-    
-    # After repo install (even if none), give Kodi a moment
-    xbmc.executebuiltin("UpdateAddonRepos")
-    xbmc.sleep(5000)
+    info(f"run_install: repos={len(repos)} addons={len(addons)}", notify=True)
 
+    # If you later add repo installs back in, we’ll add the same monitoring.
+    if repos:
+        warn("Repo install list present but not implemented in monitored mode yet. Skipping repos.")
+        # You can implement repo installs similarly to install_addons()
+
+    # Force a repo refresh before addon installs
+    info("UpdateAddonRepos builtin")
+    xbmc.executebuiltin("UpdateAddonRepos")
+    xbmc.sleep(3000)
 
     addon_installed, addon_skipped, addon_failed = install_addons(addons)
 
     return {
-        "repos": {
-            "installed": repo_installed,
-            "skipped": repo_skipped,
-            "failed": repo_failed,
-        },
-        "addons": {
-            "installed": addon_installed,
-            "skipped": addon_skipped,
-            "failed": addon_failed         
-        },
+        "repos": {"installed": [], "skipped": repos, "failed": []},
+        "addons": {"installed": addon_installed, "skipped": addon_skipped, "failed": addon_failed},
     }

@@ -12,7 +12,7 @@ from resources.lib.workflow_restore_local import restore_local
 from resources.lib.addon_installer import run_install
 from resources.lib.paths import profile
 from resources.lib.b2 import B2Client
-from resources.lib.log import info, err
+from resources.lib.log import info, warn, err, exc
 from resources.lib.jsonrpc import JsonRpc
 from resources.lib.uiwait import wait_for_modal_to_close
 
@@ -34,25 +34,25 @@ def main():
         try:
             backup_local()
         except Exception as e:
-            err(str(e))
+            exc(f"Restore failed: {e}")
             xbmcgui.Dialog().ok("Error", str(e))
     elif idx == 1:
         try:
             do_local_restore()
         except Exception as e:
-            err(str(e))
+            exc(f"Restore failed: {e}")
             xbmcgui.Dialog().ok("Error", str(e))  
     elif idx == 2:
         try:
             do_backup()
         except Exception as e:
-            err(str(e))
+            exc(f"Restore failed: {e}")
             xbmcgui.Dialog().ok("Error", str(e)) 
     elif idx == 3:
         try:
             do_restore()
         except Exception as e:
-            err(str(e))
+            exc(f"Restore failed: {e}")
             xbmcgui.Dialog().ok("Error", str(e))
     elif idx == 4:
         ADDON.openSettings()
