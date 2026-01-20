@@ -23,6 +23,9 @@ PORTABLE_DIRS = [
     "addon_data",
 ]
 
+SKIP_REPOS = {"repository.xbmc.org"}
+
+
 def backup_to_b2(build_name: str, b2_key_id: str, b2_app_key: str, b2_bucket: str, b2_prefix: str, b2_bucket_id: str, include_keymaps: bool, include_adv: bool, do_upload: bool = True):
     # 1) staging dir
     staging = temp(f"profiler/staging/{build_name}")
@@ -72,6 +75,13 @@ def backup_to_b2(build_name: str, b2_key_id: str, b2_app_key: str, b2_bucket: st
 
     for repo in manifest.get("repos", []):
         rid = repo["id"]
+        
+        if rid in SKIP_REPOS:
+            info(f"Skipping built-in repo: {rid}")
+            repo["zip_in_backup"] = ""
+            repo["zip_url"] = ""
+            repo["zip_path"] = ""
+            continue
 
         # Try C1: grab the zip Kodi originally downloaded
         src_zip = _find_latest_repo_zip_in_packages(rid)
@@ -90,10 +100,18 @@ def backup_to_b2(build_name: str, b2_key_id: str, b2_app_key: str, b2_bucket: st
         out_name = f"{rid}.zip"
         dst_zip = os.path.join(repos_stage, out_name)
         info(f"Repo zip (generated) {rid}: {dst_zip}")
-        _zip_installed_repo_folder(rid, dst_zip)
-        repo["zip_in_backup"] = f"repos/{out_name}"
-        repo["zip_url"] = ""
-        repo["zip_path"] = ""
+
+        try:
+            _zip_installed_repo_folder(rid, dst_zip)
+            repo["zip_in_backup"] = f"repos/{out_name}"
+            repo["zip_url"] = ""
+            repo["zip_path"] = ""
+        except Exception as e:
+            warn(f"Skipping repo (could not bundle zip): {rid} ({e})", notify=True)
+            # leave zip fields empty so restore knows it can't auto-install it
+            repo["zip_in_backup"] = ""
+            repo["zip_url"] = ""
+            repo["zip_path"] = ""
 
     with open(os.path.join(staging, "manifest.json"), "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2)

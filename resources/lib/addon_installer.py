@@ -9,6 +9,8 @@ from resources.lib.jsonrpc import JsonRpc
 from resources.lib.log import info, warn, err, exc
 from resources.lib.paths import temp
 
+BUILTIN_REPOS = {"repository.xbmc.org"}
+
 
 def _ensure_dir(path: str):
     if not xbmcvfs.exists(path):
@@ -120,6 +122,11 @@ def _install_repos(repo_entries, timeout_per_repo_s: int = 180):
 
             pct = int((i / total) * 100)
             dialog.update(pct, f"Repo ({i}/{total}): {rid}")
+
+            if rid in BUILTIN_REPOS and not zip_path and not zip_url:
+                info(f"Skip built-in repo: {rid}")
+                skipped.append(rid)
+                continue
 
             if rid in installed_ids:
                 info(f"Skip repo (already installed): {rid}")
