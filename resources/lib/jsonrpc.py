@@ -91,5 +91,5 @@ class JsonRpc:
         """
         info(f"Install zip: {zip_path}")
         # InstallAddon accepts a local zip path
-        xbmc.executebuiltin(f'InstallAddon("{zip_path}")')
+        xbmc.executebuiltin(f'InstallFromZip("{zip_path}")')
         wait_for_modal_to_close(timeout_ms=60000)

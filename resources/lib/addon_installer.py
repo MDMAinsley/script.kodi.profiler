@@ -153,7 +153,13 @@ def _install_repos(repo_entries, timeout_per_repo_s: int = 45):
                     rpc.install_zip(local_zip)
                     addon_folder = home(f"addons/{rid}")
                     info(f"Post-install check: addon folder exists={os.path.isdir(addon_folder)} path={addon_folder}")
-
+                    
+                    xbmc.sleep(5000)
+                    if not os.path.isdir(home(f"addons/{rid}")):
+                        err(f"Zip install did not extract addon folder for {rid}. Addon DB may be broken.", notify=True)
+                        failed.append({"id": rid, "error": f"Zip install did not extract addon folder for {rid}."})
+                        continue
+    
                     rpc.update_addon_repos()
                     xbmc.sleep(2000)
 
