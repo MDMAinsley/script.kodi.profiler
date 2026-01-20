@@ -79,7 +79,7 @@ def install_addons(addon_ids, timeout_per_addon_s=180):
                 break
 
             pct = int((i / total) * 100)
-            dialog.update(pct, f"{i}/{total}", f"Installing: {aid}")
+            dialog.update(pct, f"Installing ({i}/{total}): {aid}")
 
             if aid in installed_ids:
                 info(f"Skip (already installed): {aid}")

@@ -1,7 +1,7 @@
 ﻿<?xml version="1.0" encoding="UTF-8"?>
 <addon id="script.kodi.profiler" 
 	   name="Profiler" 
-	   version="1.0.7"
+	   version="1.0.8"
 	   provider-name="MDMAinsley">
 	   
   <requires>
