@@ -57,6 +57,20 @@ class JsonRpc:
     def update_addon_repos(self):
         info("UpdateAddonRepos builtin")
         xbmc.executebuiltin("UpdateAddonRepos")
+        
+    def set_setting(self, setting: str, value):
+        info(f"Setting {setting} -> {value}")
+        return self.call(
+            "Settings.SetSettingValue",
+            {"setting": setting, "value": value}
+        )
+
+    def get_setting(self, setting: str):
+        info(f"Get setting {setting}")
+        return self.call(
+            "Settings.GetSettingValue",
+            {"setting": setting}
+        )
 
     # --- Install request (fallback to builtin) ---
 
