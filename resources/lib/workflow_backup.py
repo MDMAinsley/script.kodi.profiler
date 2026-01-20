@@ -5,7 +5,7 @@ import os
 import glob
 import zipfile
 
-from resources.lib.fileops import ensure_dir, copy_file, walk_dir
+from resources.lib.fileops import ensure_dir, copy_file
 from resources.lib.manifest import build_manifest
 from resources.lib.zipops import zip_from_dir
 from resources.lib.b2 import B2Client
@@ -148,12 +148,8 @@ def _zip_installed_repo_folder(repo_id: str, out_zip: str):
                 arc_path = f"{repo_id}/" + (f"{rel_root}/" if rel_root else "") + fn
                 z.write(full_path, arc_path)
 
-def _zip_installed_repo_folder(repo_id: str, out_zip: str):
-    """
-    Fallback: zip the installed repo add-on folder.
-    special://home/addons/<repo_id>/
-    """
-    src_dir = home(f"addons/{repo_id}")
-    if not os.path.isdir(src_dir):
-        raise RuntimeError(f"Repo folder not found for {repo_id}: {src_dir}")
-    zip_from_dir(src_dir, out_zip)
+def _find_latest_repo_zip_in_packages(repo_id: str) -> str:
+    pkg_dir = home("addons/packages")
+    pattern = os.path.join(pkg_dir, f"{repo_id}-*.zip")
+    matches = sorted(glob.glob(pattern), key=lambda p: os.path.getmtime(p), reverse=True)
+    return matches[0] if matches else ""
