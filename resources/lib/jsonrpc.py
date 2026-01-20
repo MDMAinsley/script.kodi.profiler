@@ -1,6 +1,8 @@
 import json
 import time
 import xbmc
+import xbmcaddon
+import xbmcvfs
 from typing import Optional, Dict, Any, List
 
 try:
@@ -83,13 +85,13 @@ class JsonRpc:
                 wait_for_modal_to_close(timeout_ms=60000)
                 return True
             raise
-
+        
     def install_zip(self, zip_path: str):
-        """
-        Install a LOCAL zip file (repo zip) reliably on Firestick.
-        Use InstallAddon(<zip_path>) — works across versions.
-        """
         info(f"Install zip: {zip_path}")
-        # InstallAddon accepts a local zip path
-        xbmc.executebuiltin(f'InstallFromZip("{zip_path}")')
+
+        # Make sure path is a real filesystem path Kodi understands
+        zip_path = xbmcvfs.translatePath(zip_path)
+
+        installer = xbmcaddon.AddonInstaller()
+        installer.install(zip_path)
         wait_for_modal_to_close(timeout_ms=60000)

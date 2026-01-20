@@ -139,9 +139,16 @@ def _install_repos(repo_entries, timeout_per_repo_s: int = 45):
                 if zip_path:
                     info(f"Installing repo from local zip: {rid} -> {zip_path}", notify=True)
                     rpc.install_zip(zip_path)
+                    
+                    xbmc.sleep(5000)
                     addon_folder = home(f"addons/{rid}")
                     info(f"Post-install check: addon folder exists={os.path.isdir(addon_folder)} path={addon_folder}")
-
+                    
+                    if not os.path.isdir(home(f"addons/{rid}")):
+                        err(f"Zip install did not extract addon folder for {rid}. Addon DB may be broken.", notify=True)
+                        failed.append({"id": rid, "error": f"Zip install did not extract addon folder for {rid}."})
+                        continue
+    
                     rpc.update_addon_repos()
                     xbmc.sleep(2000)
 
@@ -151,10 +158,11 @@ def _install_repos(repo_entries, timeout_per_repo_s: int = 45):
                     info(f"Repo zip_url fallback for {rid}: {zip_url}")
                     _download_to(zip_url, local_zip)
                     rpc.install_zip(local_zip)
+                    
+                    xbmc.sleep(5000)
                     addon_folder = home(f"addons/{rid}")
                     info(f"Post-install check: addon folder exists={os.path.isdir(addon_folder)} path={addon_folder}")
                     
-                    xbmc.sleep(5000)
                     if not os.path.isdir(home(f"addons/{rid}")):
                         err(f"Zip install did not extract addon folder for {rid}. Addon DB may be broken.", notify=True)
                         failed.append({"id": rid, "error": f"Zip install did not extract addon folder for {rid}."})
