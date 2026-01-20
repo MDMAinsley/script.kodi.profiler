@@ -8,6 +8,7 @@ import urllib.request
 from resources.lib.jsonrpc import JsonRpc
 from resources.lib.log import info, warn, err, exc
 from resources.lib.paths import temp
+from resources.lib.paths import home
 
 BUILTIN_REPOS = {"repository.xbmc.org"}
 
@@ -141,6 +142,9 @@ def _install_repos(repo_entries, timeout_per_repo_s: int = 45):
                     addon_folder = home(f"addons/{rid}")
                     info(f"Post-install check: addon folder exists={os.path.isdir(addon_folder)} path={addon_folder}")
 
+                    rpc.update_addon_repos()
+                    xbmc.sleep(2000)
+
                 # C2: zip_url fallback
                 elif zip_url:
                     local_zip = temp(f"profiler_repo_zips/{rid}.zip")
@@ -149,6 +153,9 @@ def _install_repos(repo_entries, timeout_per_repo_s: int = 45):
                     rpc.install_zip(local_zip)
                     addon_folder = home(f"addons/{rid}")
                     info(f"Post-install check: addon folder exists={os.path.isdir(addon_folder)} path={addon_folder}")
+
+                    rpc.update_addon_repos()
+                    xbmc.sleep(2000)
 
                 else:
                     # Dicts-only policy: no id-only installs
