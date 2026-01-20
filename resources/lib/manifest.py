@@ -13,7 +13,11 @@ def build_manifest() -> dict:
     addon_ids = sorted({a.get("addonid") for a in addons if a.get("addonid")})
 
     # Separate repos vs addons
-    repo_ids = sorted([a for a in addon_ids if a.startswith("repository.")])
+    repo_ids = sorted([
+        a for a in addon_ids
+        if a.startswith("repository.")
+        and not a.startswith("repository.xbmc")
+    ])
     addon_ids = sorted([a for a in addon_ids if not a.startswith("repository.")])
 
     # Kodi major version (best effort; safe default)
